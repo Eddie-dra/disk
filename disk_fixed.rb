@@ -13,7 +13,8 @@ Ohai.plugin(:Diskinformation) do
     diskinfo = Mash.new
     gb = 1_073_741_824
 
-    multipath_devices = []
+    multipath_slaves = []
+    multipath_enabled = false
 
     # Parse SAN disks from multipath if available
     begin
@@ -24,8 +25,7 @@ Ohai.plugin(:Diskinformation) do
         mpath_name = Regexp.last_match(1)
         size_line = multipath_output[index + 1]
 
-        # Record this device name to skip its components later
-        multipath_devices << mpath_name
+        multipath_enabled = true
 
         if size_line =~ /size=(\d+\.?\d*)T/
           mpath_size_tb = Regexp.last_match(1).to_f
@@ -41,13 +41,15 @@ Ohai.plugin(:Diskinformation) do
           Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_gb} GB")
         end
       end
+
+      # Only gather slaves if multipath is truly present
+      if multipath_enabled
+        multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
+        Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
+      end
     rescue
       Ohai::Log.debug('Multipath is not available on this server.')
     end
-
-    # Get a list of multipath slave devices (e.g., sda, sdb part of mpatha)
-    mpath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
-    Ohai::Log.debug("Multipath slave devices detected: #{mpath_slaves}")
 
     # Collect local disks
     Dir['/sys/block/{sd*,nvme*}'].each do |device|
@@ -56,8 +58,8 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip multipath slave devices
-      if mpath_slaves.include?(disk)
+      # Skip only if multipath is active AND disk is a slave
+      if multipath_enabled && multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
         next
       end
