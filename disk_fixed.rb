@@ -13,48 +13,46 @@ Ohai.plugin(:Diskinformation) do
     diskinfo = Mash.new
     gb = 1_073_741_824
 
-    # Collect local disk information for both SCSI and NVMe devices
+    # Collect local disk information for SCSI and NVMe
     Dir['/sys/block/{sd*,nvme*}'].each do |device|
       disk = File.basename(device)
       Ohai::Log.debug("Inspecting device: #{disk}")
 
-      if disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
-        so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
+      next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-        # Get disk vendor
-        vendor = if File.exist?("#{device}/device/vendor")
-                   File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
-                 else
-                   'Unknown'
-                 end
-        Ohai::Log.debug("Vendor for #{disk}: #{vendor}")
+      so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
 
-        if vendor && %w[DELL HP VMware ATA SEAGATE SAMSUNG INTEL Unknown].include?(vendor)
-          # Find the correct disk line in lsblk output
-          disk_line = so.find { |line| line.strip.split[2] == 'disk' }
+      # Find the correct 'disk' entry
+      disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
-          if disk_line
-            disk_parts = disk_line.strip.split
-            disk_size = disk_parts[1].to_i / gb
-            disks[disk] = Mash.new unless disks.key?(disk)
-            disks[disk]['type'] = 'Local'
-            disks[disk]['size_gb'] = disk_size
-            Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
-          else
-            Ohai::Log.debug("No valid 'disk' entry found in lsblk output for #{disk}")
-          end
-        end
-      else
-        Ohai::Log.debug("Device #{disk} does not match expected patterns for SCSI or NVMe.")
+      unless disk_line
+        Ohai::Log.debug("No valid 'disk' line found for #{disk}")
+        next
       end
+
+      disk_parts = disk_line.strip.split
+      disk_size = disk_parts[1].to_i / gb
+
+      # Get vendor
+      vendor = if File.exist?("#{device}/device/vendor")
+                 File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
+               else
+                 'Unknown'
+               end
+      Ohai::Log.debug("Vendor for #{disk}: #{vendor}")
+
+      # Accept all vendors for local disks, we log for info only
+      disks[disk] = Mash.new unless disks.key?(disk)
+      disks[disk]['type'] = 'Local'
+      disks[disk]['size_gb'] = disk_size
+      Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
     end
 
-    # Only try to parse SAN disks if multipath is available
+    # Try to parse SAN disks only if multipath is available
     begin
       multipath_output = shell_out('multipath -ll').stdout.lines
 
       multipath_output.each_with_index do |line, index|
-        # Match lines containing mpath names and sizes
         next unless line =~ /^(\w+)\s+\(.*\)/
 
         mpath_name = Regexp.last_match(1)
@@ -78,10 +76,10 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug('Multipath is not available on this server.')
     end
 
-    # Log parsed disks for verification
+    # Final list for verification
     Ohai::Log.debug("Final parsed disks: #{disks}")
 
-    # Get WWN details
+    # Get WWN info
     Dir['/sys/class/fc_host/*'].each do |fc_host|
       %w(port_name).each do |port|
         if File.exist?("#{fc_host}/#{port}")
