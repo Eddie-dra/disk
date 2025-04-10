@@ -58,9 +58,15 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip only if multipath is active AND disk is a slave
+      # Skip if disk is a multipath slave
       if multipath_enabled && multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
+        next
+      end
+
+      # Skip if disk has WWID and multipath is enabled (likely a SAN single-path)
+      if multipath_enabled && File.exist?("#{device}/device/wwid")
+        Ohai::Log.debug("Skipping #{disk} — has WWID but not part of multipath (likely SAN single-path)")
         next
       end
 
