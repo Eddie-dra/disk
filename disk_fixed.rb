@@ -24,7 +24,9 @@ Ohai.plugin(:Diskinformation) do
       next if disk =~ /^dm-/
 
       # Step 3: Skip disks that are part of a multipath device
-      if multipath_devices.any? { |mpath| File.exist?("/sys/block/#{disk}/slaves/#{mpath}") }
+      is_slave = multipath_devices.any? { |mpath| File.exist?("/sys/block/#{disk}/slaves/#{mpath}") }
+      
+      if is_slave
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath device.")
         next
       end
@@ -45,6 +47,9 @@ Ohai.plugin(:Diskinformation) do
 
     # Step 4: Add multipath devices (dm-*) to the hash
     multipath_devices.each do |mpath|
+      # Skip if it's already added as a slave disk
+      next if disks.key?(mpath)
+
       disks[mpath] = Mash.new unless disks.key?(mpath)
       disks[mpath]['type'] = 'Multipath'
       disks[mpath]['size_gb'] = "Multipath device"  # Or actual multipath size if available
