@@ -10,11 +10,19 @@ Ohai.plugin(:Diskinformation) do
     gb = 1_073_741_824
 
     # Collect local disks using lsblk or lshw
+    physical_disks = Set.new  # To track the physical disks and avoid duplicates
+
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
 
       # Skip any device that is a multipath slave (dm-* devices)
       next if disk =~ /^dm-\d+/
+
+      # Skip if the disk is already processed (to avoid duplicates)
+      next if physical_disks.include?(disk)
+
+      # Add this disk to the set of processed disks
+      physical_disks.add(disk)
 
       # Use lsblk to get the size of the disk
       disk_size = begin
