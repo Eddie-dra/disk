@@ -58,6 +58,8 @@ Ohai.plugin(:Diskinformation) do
         next
       end
 
+      # NO MORE SKIPPING DISKS BASED ON WWID 🔥
+
       so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
       disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
