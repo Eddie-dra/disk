@@ -28,6 +28,7 @@ Ohai.plugin(:Diskinformation) do
     # Step 2: Collect all disks (sd*, nvme*, etc.)
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
+
       # Skip dm devices (multipath devices themselves)
       next if disk =~ /^dm-/
 
@@ -55,7 +56,15 @@ Ohai.plugin(:Diskinformation) do
     multipath_devices.each do |mpath|
       disks[mpath] = Mash.new unless disks.key?(mpath)
       disks[mpath]['type'] = 'Multipath'
-      disks[mpath]['size_gb'] = "Multipath device"  # Or actual multipath size if available
+
+      # Get the size of the multipath device
+      mpath_size = begin
+        out = shell_out("lsblk -b -dn -o SIZE /dev/#{mpath}").stdout.strip
+        out.to_i / 1_073_741_824  # Convert bytes to GB
+      rescue
+        0
+      end
+      disks[mpath]['size_gb'] = mpath_size
     end
 
     disk_information({ 'disks' => disks })
