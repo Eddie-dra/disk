@@ -1,74 +1,94 @@
-      "mpatha": {
-        "type": "SAN",
-        "size_gb": 14336.0
-      },
-      "sda": {
-        "type": "Local",
-        "size_gb": 223,
-        "vendor": "DELL"
-      }
-    }
-  }
-}
-[root@hostname PROD:ohai]# lsblk 
-NAME                       MAJ:MIN RM   SIZE RO TYPE  MOUNTPOINT
-sda                          8:0    0   223G  0 disk  
-├─sda1                       8:1    0   200M  0 part  /boot/efi
-├─sda2                       8:2    0     1G  0 part  /boot
-└─sda3                       8:3    0 221.8G  0 part  
-  ├─systemvg-rootlv        253:0    0     2G  0 lvm   /
-  ├─systemvg-swaplv        253:1    0     4G  0 lvm   [SWAP]
-  ├─systemvg-usrlv         253:2    0    10G  0 lvm   /usr
-  ├─systemvg-homelv        253:3    0     2G  0 lvm   /home
-  ├─systemvg-optlv         253:5    0     5G  0 lvm   /opt
-  ├─systemvg-tmplv         253:6    0     5G  0 lvm   /tmp
-  ├─systemvg-kdumplv       253:7    0     2G  0 lvm   /var/crash
-  ├─systemvg-varlogauditlv 253:8    0    10G  0 lvm   /var/log/audit
-  ├─systemvg-varloglv      253:9    0     5G  0 lvm   /var/log
-  └─systemvg-varlv         253:10   0     5G  0 lvm   /var
-sdb                          8:16   0  10.5T  0 disk  
-└─datavg-glide             253:4    0  10.5T  0 lvm   /glide
-sdc                          8:32   0    14T  0 disk  
-└─mpatha                   253:11   0    14T  0 mpath 
-  └─sanvg-glidebkp         253:12   0    14T  0 lvm   /glide_bkp
-sdd                          8:48   0    14T  0 disk  
-└─mpatha                   253:11   0    14T  0 mpath 
-  └─sanvg-glidebkp         253:12   0    14T  0 lvm   /glide_bkp
-sde                          8:64   0    14T  0 disk  
-└─mpatha                   253:11   0    14T  0 mpath 
-  └─sanvg-glidebkp         253:12   0    14T  0 lvm   /glide_bkp
-sdf                          8:80   0    14T  0 disk  
-└─mpatha                   253:11   0    14T  0 mpath 
-  └─sanvg-glidebkp         253:12   0    14T  0 lvm   /glide_bkp
-[root@hostname PROD:ohai]# pvs
-  PV                 VG       Fmt  Attr PSize   PFree  
-  /dev/mapper/mpatha sanvg    lvm2 a--  <14.00t      0 
-  /dev/sda3          systemvg lvm2 a--  221.80g 171.80g
-  /dev/sdb           datavg   lvm2 a--  <10.48t      0 
-[root@hostname PROD:ohai]# vgs
-  VG       #PV #LV #SN Attr   VSize   VFree  
-  datavg     1   1   0 wz--n- <10.48t      0 
-  sanvg      1   1   0 wz--n- <14.00t      0 
-  systemvg   1  10   0 wz--n- 221.80g 171.80g
-[root@hostname PROD:ohai]# df -h
-Filesystem                          Size  Used Avail Use% Mounted on
-devtmpfs                            377G     0  377G   0% /dev
-tmpfs                               378G  4.0K  378G   1% /dev/shm
-tmpfs                               378G  2.0M  378G   1% /run
-tmpfs                               378G     0  378G   0% /sys/fs/cgroup
-/dev/mapper/systemvg-rootlv         2.0G  107M  1.9G   6% /
-/dev/mapper/systemvg-usrlv           10G  3.3G  6.8G  33% /usr
-/dev/mapper/datavg-glide             11T  8.3T  2.3T  79% /glide
-/dev/mapper/systemvg-homelv         2.0G   47M  2.0G   3% /home
-/dev/mapper/systemvg-varlv          5.0G  776M  4.3G  16% /var
-/dev/mapper/systemvg-optlv          5.0G  2.6G  2.5G  52% /opt
-/dev/sda2                          1014M  340M  675M  34% /boot
-/dev/mapper/systemvg-tmplv          5.0G   69M  5.0G   2% /tmp
-/dev/mapper/systemvg-varloglv       5.0G  1.3G  3.8G  25% /var/log
-/dev/mapper/systemvg-kdumplv        2.0G   47M  2.0G   3% /var/crash
-/dev/sda1                           200M  5.9M  194M   3% /boot/efi
-/dev/mapper/sanvg-glidebkp           14T   13T  1.9T  87% /glide_bkp
-/dev/mapper/systemvg-varlogauditlv   10G  137M  9.9G   2% /var/log/audit
-tmpfs                                76G     0   76G   0% /run/user/117748
-tmpfs                                76G     0   76G   0% /run/user/0
+[root@hostname PROD:ohai]# multipath -ll
+mpatha (3600507681081032d4000000000001a15) dm-11 IBM,2145
+size=14T features='1 queue_if_no_path' hwhandler='1 alua' wp=rw
+|-+- policy='service-time 0' prio=10 status=enabled
+| |- 11:0:0:1 sdc 8:32 active ready running
+| `- 17:0:0:1 sde 8:64 active ready running
+`-+- policy='service-time 0' prio=50 status=active
+  |- 11:0:1:1 sdd 8:48 active ready running
+  `- 17:0:1:1 sdf 8:80 active ready running
+[root@hostname PROD:ohai]# ls /sys/block/sd
+sda/ sdb/ sdc/ sdd/ sde/ sdf/ 
+[root@hostname PROD:ohai]# ls /sys/block/sdb/dev
+dev     device/ 
+[root@hostname PROD:ohai]# ls /sys/block/sdb/dev
+dev     device/ 
+[root@hostname PROD:ohai]# ls /sys/block/sdb/device/wwid 
+/sys/block/sdb/device/wwid
+[root@hostname PROD:ohai]# lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/sdb 
+sdb 11520310247424 disk 
+datavg-glide 11520306053120 lvm /glide
+[root@hostname PROD:ohai]# ls /sys/block/sd
+sda/ sdb/ sdc/ sdd/ sde/ sdf/ 
+[root@hostname PROD:ohai]# ls /sys/block/sd
+sda/ sdb/ sdc/ sdd/ sde/ sdf/ 
+[root@hostname PROD:ohai]# ls /sys/block/sdb/
+alignment_offset  dev                events             ext_range  inflight   power  removable  slaves     trace
+bdi               device             events_async       hidden     integrity  queue  ro         stat       uevent
+capability        discard_alignment  events_poll_msecs  holders    mq         range  size       subsystem
+[root@hostname PROD:ohai]# ls /sys/block/dm-*
+/sys/block/dm-0:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-1:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-10:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-11:
+alignment_offset  dev                events             ext_range  inflight   power  removable  slaves     trace
+bdi               discard_alignment  events_async       hidden     integrity  queue  ro         stat       uevent
+capability        dm                 events_poll_msecs  holders    mq         range  size       subsystem
+
+/sys/block/dm-12:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-2:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-3:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-4:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-5:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-6:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-7:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-8:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
+
+/sys/block/dm-9:
+alignment_offset  dev                events             ext_range  inflight   queue      ro      stat       uevent
+bdi               discard_alignment  events_async       hidden     integrity  range      size    subsystem
+capability        dm                 events_poll_msecs  holders    power      removable  slaves  trace
 [root@hostname PROD:ohai]# 
