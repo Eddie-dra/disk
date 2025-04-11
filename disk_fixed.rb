@@ -1,4 +1,3 @@
-#
 # Copyright:: 2016, Danske Bank A/S
 #
 # This plugin collects disk volume information for Linux hosts
@@ -20,7 +19,7 @@ Ohai.plugin(:Diskinformation) do
       multipath_output = shell_out('multipath -ll').stdout.lines
 
       multipath_output.each_with_index do |line, index|
-        next unless line =~ /^(\w+)\s+\(.*\)/
+        next unless line =~ /^(\w+)\s+\(.*\)/  # Find multipath devices
         mpath_name = Regexp.last_match(1)
         size_line = multipath_output[index + 1]
 
@@ -68,7 +67,8 @@ Ohai.plugin(:Diskinformation) do
       disk_size = begin
         out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
         out.to_i / gb
-      rescue
+      rescue => e
+        Ohai::Log.debug("Failed to get size for #{disk} using lsblk: #{e.message}")
         0
       end
 
@@ -78,8 +78,8 @@ Ohai.plugin(:Diskinformation) do
           sectors = File.read("/sys/block/#{disk}/size").to_i
           sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i
           disk_size = (sectors * sector_size) / gb
-        rescue
-          Ohai::Log.debug("Failed to calculate size for #{disk}")
+        rescue => e
+          Ohai::Log.debug("Failed to calculate size for #{disk} using sysfs: #{e.message}")
           next
         end
       end
