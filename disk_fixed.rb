@@ -51,20 +51,20 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug('Multipath is not available on this server.')
     end
 
-    # Collect local disks (sd*, nvme*)
+    # Collect local disks
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
       Ohai::Log.debug("Checking disk: #{disk}")
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Exclude if part of multipath
+      # Skip if disk is part of multipath
       if multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk}: part of multipath")
         next
       end
 
-      # Use lsblk to get size
+      # Get disk size
       disk_size = begin
         out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
         out.to_i / gb
@@ -84,7 +84,7 @@ Ohai.plugin(:Diskinformation) do
         end
       end
 
-      # Gracefully handle missing vendor
+      # Get vendor info (handle gracefully if not available)
       vendor = 'Unknown'
       begin
         vendor_path = "#{device_path}/device/vendor"
@@ -93,6 +93,7 @@ Ohai.plugin(:Diskinformation) do
         Ohai::Log.debug("Vendor info missing or unreadable for #{disk}")
       end
 
+      # Add disk information to the hash
       disks[disk] = Mash.new
       disks[disk]['type'] = 'Local'
       disks[disk]['size_gb'] = disk_size
@@ -111,6 +112,7 @@ Ohai.plugin(:Diskinformation) do
       end
     end
 
+    # Final output
     diskinfo['disks'] = disks
     disk_information diskinfo
   end
