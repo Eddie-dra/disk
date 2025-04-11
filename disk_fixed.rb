@@ -19,15 +19,15 @@ Ohai.plugin(:Diskinformation) do
           Ohai::Log.debug("Multipath device detected: #{mpath_name}")
         end
       end
-    rescue
-      Ohai::Log.debug('No multipath information available.')
+    rescue => e
+      Ohai::Log.debug("No multipath information available: #{e}")
     end
 
-    # Collect all local disks (sd*, nvme*) from /sys/block
+    # Collect all disks (sd*, nvme*)
     Dir['/sys/block/{sd*,nvme*}'].each do |device_path|
       disk = File.basename(device_path)
 
-      # Skip multipath duplicates (i.e., if the device is part of a multipath setup)
+      # Skip multipath duplicates
       if multipath_duplicates.include?(disk)
         Ohai::Log.debug("Skipping #{disk}: part of multipath device")
         next
