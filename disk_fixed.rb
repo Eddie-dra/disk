@@ -52,9 +52,9 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip only if explicitly a multipath slave
+      # Skip if disk is a multipath slave
       if multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk} because it's a multipath slave")
+        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
         next
       end
 
