@@ -14,7 +14,6 @@ Ohai.plugin(:Diskinformation) do
     gb = 1_073_741_824
 
     multipath_slaves = []
-    multipath_enabled = false
 
     # Parse SAN disks from multipath if available
     begin
@@ -24,8 +23,6 @@ Ohai.plugin(:Diskinformation) do
         next unless line =~ /^(\w+)\s+\(.*\)/
         mpath_name = Regexp.last_match(1)
         size_line = multipath_output[index + 1]
-
-        multipath_enabled = true
 
         if size_line =~ /size=(\d+\.?\d*)T/
           mpath_size_tb = Regexp.last_match(1).to_f
@@ -42,11 +39,8 @@ Ohai.plugin(:Diskinformation) do
         end
       end
 
-      # Only gather slaves if multipath is truly present
-      if multipath_enabled
-        multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
-        Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
-      end
+      multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
+      Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
     rescue
       Ohai::Log.debug('Multipath is not available on this server.')
     end
@@ -58,15 +52,9 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip if disk is a multipath slave
-      if multipath_enabled && multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
-        next
-      end
-
-      # Skip if disk has WWID and multipath is enabled (likely a SAN single-path)
-      if multipath_enabled && File.exist?("#{device}/device/wwid")
-        Ohai::Log.debug("Skipping #{disk} — has WWID but not part of multipath (likely SAN single-path)")
+      # Skip only if explicitly a multipath slave
+      if multipath_slaves.include?(disk)
+        Ohai::Log.debug("Skipping #{disk} because it's a multipath slave")
         next
       end
 
