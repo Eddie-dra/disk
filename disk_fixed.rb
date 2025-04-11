@@ -5,27 +5,35 @@ Ohai.plugin(:Diskinformation) do
     disks = Mash.new
     gb = 1_073_741_824  # 1 GB in bytes
 
-    # Initialize multipath slaves
-    multipath_slaves = []
+    # Initialize multipath duplicates set
+    multipath_duplicates = Set.new
 
-    # Check if multipath devices are available
+    # Gather multipath devices from multipath -ll
     begin
-      multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
-    rescue => e
-      Ohai::Log.debug("Error reading multipath slaves: #{e}")
+      multipath_output = shell_out('multipath -ll').stdout.lines
+      multipath_output.each do |line|
+        # Detect multipath devices and add them to the set of duplicates
+        if line =~ /^(\w+)\s+\(.*\)/  # Detect multipath device name
+          mpath_name = Regexp.last_match(1)
+          multipath_duplicates.add(mpath_name)
+          Ohai::Log.debug("Multipath device detected: #{mpath_name}")
+        end
+      end
+    rescue
+      Ohai::Log.debug('No multipath information available.')
     end
 
-    # Collect local disks (sd*, nvme*)
+    # Collect all local disks (sd*, nvme*) from /sys/block
     Dir['/sys/block/{sd*,nvme*}'].each do |device_path|
       disk = File.basename(device_path)
 
-      # Skip disk if it's part of a multipath device
-      if multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk}: part of multipath")
+      # Skip multipath duplicates (i.e., if the device is part of a multipath setup)
+      if multipath_duplicates.include?(disk)
+        Ohai::Log.debug("Skipping #{disk}: part of multipath device")
         next
       end
 
-      # Only consider valid local disks (sd*, nvme*)
+      # Only consider valid disk names (e.g., sda, sdb, etc.)
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/  # Valid disk names
 
       # Get disk size using lsblk
