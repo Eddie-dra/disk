@@ -1,112 +1,80 @@
-#
-# Copyright:: 2016, Danske Bank A/S
-#
-# This plugin collects disk volume information for Linux hosts
-#
-
 Ohai.plugin(:Diskinformation) do
   provides 'disk_information'
-  collect_data(:linux) do
+  collect_data(:linux, :redhat) do
     disks = Mash.new
-    diskinfo = Mash.new
-    gb = 1_073_741_824
+    multipath_devices = []
+    local_disks = Mash.new
 
-    # Get list of all available block devices
-    block_devices = Dir.glob('/sys/block/*').map { |d| File.basename(d) }
-    Ohai::Log.debug("Found block devices: #{block_devices.inspect}")
+    # Step 1: Collect all block devices (both disks and multipath)
+    Dir['/sys/block/{sd*,nvme*,dm-*}'].each do |device|
+      disk = File.basename(device)
 
-    # Get multipath information if available
-    multipath_devices = {}
-    multipath_slaves = []
-    
-    begin
-      if File.exist?('/etc/multipath.conf') || shell_out('which multipath').exitstatus == 0
-        # Get multipath slaves and their mappings
-        Dir.glob('/sys/block/dm-*/slaves/*').each do |slave|
-          slave_name = File.basename(slave)
-          dm_device = File.basename(File.dirname(File.dirname(slave)))
-          multipath_slaves << slave_name
-          multipath_devices[dm_device] ||= []
-          multipath_devices[dm_device] << slave_name
-        end
-        Ohai::Log.debug("Multipath slaves found: #{multipath_slaves.inspect}")
-        Ohai::Log.debug("Multipath devices mapping: #{multipath_devices.inspect}")
-      end
-    rescue => e
-      Ohai::Log.debug("Multipath check failed: #{e.message}")
-    end
-
-    # Process each block device
-    block_devices.each do |disk|
-      next unless disk =~ /^(sd|hd|vd|xvd|nvme|dm-)/  # Skip loop, ram, etc.
-
-      # Skip if this is a multipath slave (we'll get it through the multipath device)
-      if multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk} - part of multipath")
+      # Skip multipath devices (dm-*), we will handle them separately later
+      if disk =~ /^dm-/
+        multipath_devices << disk
         next
       end
 
-      Ohai::Log.debug("Processing disk: #{disk}")
+      # Check if this disk is part of a multipath device (as a slave)
+      is_multipath_slave = false
+      Dir.glob("/sys/block/#{disk}/slaves/*").each do |slave|
+        if multipath_devices.include?(File.basename(slave))
+          is_multipath_slave = true
+          break
+        end
+      end
 
+      # If this is a multipath slave, skip it
+      next if is_multipath_slave
+
+      # Get the disk size using lsblk
+      disk_size = 0
       begin
-        # Get disk size
-        size_file = "/sys/block/#{disk}/size"
-        if File.exist?(size_file)
-          sectors = File.read(size_file).to_i
-          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i rescue 512
-          size_bytes = sectors * sector_size
-          size_gb = size_bytes / gb
-        else
-          # Fallback to lsblk if sysfs info not available
-          lsblk_output = shell_out("lsblk -b -n -d -o SIZE /dev/#{disk}").stdout.strip
-          size_gb = lsblk_output.to_i / gb
-        end
+        disk_size = shell_out("lsblk -b -o SIZE -n -r /dev/#{disk}").stdout.strip.to_i / (1024 * 1024 * 1024)
+      rescue
+        Ohai::Log.debug("Failed to get size for disk #{disk}")
+      end
 
-        # Get disk vendor
-        vendor = if File.exist?("/sys/block/#{disk}/device/vendor")
-                   File.read("/sys/block/#{disk}/device/vendor").strip
-                 else
-                   'Unknown'
-                 end
-
-        # Determine disk type and name
-        if disk.start_with?('dm-') && multipath_devices.key?(disk)
-          # This is a multipath device - use the first slave name for reporting
-          physical_disk = multipath_devices[disk].first
-          type = 'SAN (Multipath)'
-          Ohai::Log.debug("Multipath device #{disk} maps to physical disk #{physical_disk}")
-        else
-          physical_disk = disk
-          type = if disk.start_with?('dm-')
-                   'LVM'
-                 else
-                   'Local'
-                 end
+      # If we failed to get the size from lsblk, try sysfs
+      if disk_size == 0
+        begin
+          size = File.read("/sys/block/#{disk}/size").to_i
+          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i
+          disk_size = (size * sector_size) / (1024 * 1024 * 1024)
+        rescue
+          Ohai::Log.debug("Failed to calculate size for #{disk} from sysfs")
         end
+      end
 
-        # Only add if we haven't seen this physical disk already
-        unless disks.key?(physical_disk)
-          disks[physical_disk] = {
-            'size_gb' => size_gb,
-            'vendor' => vendor,
-            'type' => type
-          }
-          Ohai::Log.debug("Added disk #{physical_disk}: #{disks[physical_disk].inspect}")
-        end
-      rescue => e
-        Ohai::Log.debug("Failed to process disk #{disk}: #{e.message}")
+      # Add valid disks to local_disks
+      if disk_size > 0
+        local_disks[disk] = Mash.new
+        local_disks[disk]['type'] = 'Local'
+        local_disks[disk]['size_gb'] = disk_size
       end
     end
 
-    # Add WWN info if available
-    Dir.glob('/sys/class/fc_host/*').each do |fc_host|
-      port_name = "#{fc_host}/port_name"
-      if File.exist?(port_name)
-        diskinfo['NodeWWN' + File.basename(fc_host)] = File.read(port_name).strip
+    # Step 2: Handle multipath devices (dm-*), add them as separate entries
+    multipath_devices.each do |mpath_device|
+      disk_size = 0
+      begin
+        disk_size = shell_out("lsblk -b -o SIZE -n -r /dev/#{mpath_device}").stdout.strip.to_i / (1024 * 1024 * 1024)
+      rescue
+        Ohai::Log.debug("Failed to get size for multipath device #{mpath_device}")
+      end
+
+      if disk_size > 0
+        disks[mpath_device] = Mash.new
+        disks[mpath_device]['type'] = 'Multipath'
+        disks[mpath_device]['size_gb'] = disk_size
       end
     end
 
-    diskinfo['disks'] = disks
+    # Step 3: Combine local disks and multipath disks
+    diskinfo = Mash.new
+    diskinfo['disks'] = local_disks.merge(disks)
+
+    # Step 4: Return the final list
     disk_information diskinfo
   end
 end
