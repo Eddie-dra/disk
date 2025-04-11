@@ -6,6 +6,7 @@
 
 Ohai.plugin(:Diskinformation) do
   provides 'disk_information'
+
   collect_data(:linux, :redhat) do
     Ohai::Log.debug('Starting DiskInfoPlugin')
 
@@ -15,7 +16,7 @@ Ohai.plugin(:Diskinformation) do
 
     multipath_slaves = []
 
-    # Parse SAN disks from multipath if available
+    # --- Step 1: Parse multipath SAN disks ---
     begin
       multipath_output = shell_out('multipath -ll').stdout.lines
 
@@ -25,89 +26,79 @@ Ohai.plugin(:Diskinformation) do
         size_line = multipath_output[index + 1]
 
         if size_line =~ /size=(\d+\.?\d*)T/
-          mpath_size_tb = Regexp.last_match(1).to_f
-          disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
-          disks[mpath_name]['size_gb'] = mpath_size_tb * 1024
-          disks[mpath_name]['type'] = 'SAN'
-          Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_tb * 1024} GB")
+          size = Regexp.last_match(1).to_f * 1024
         elsif size_line =~ /size=(\d+\.?\d*)G/
-          mpath_size_gb = Regexp.last_match(1).to_f
-          disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
-          disks[mpath_name]['size_gb'] = mpath_size_gb
-          disks[mpath_name]['type'] = 'SAN'
-          Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_gb} GB")
+          size = Regexp.last_match(1).to_f
+        else
+          next
         end
+
+        disks[mpath_name] = Mash.new
+        disks[mpath_name]['type'] = 'SAN'
+        disks[mpath_name]['size_gb'] = size
+        Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{size} GB")
       end
 
+      # Get list of multipath slave devices (e.g., sda, sdb, etc.)
       multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
-      Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
+      Ohai::Log.debug("Multipath slave devices: #{multipath_slaves}")
     rescue => e
-      Ohai::Log.debug("Multipath not available or failed: #{e}")
+      Ohai::Log.debug("Multipath not available: #{e}")
     end
 
-    # Collect local disks
-    Dir['/sys/block/{sd*,nvme*}'].each do |device|
-      disk = File.basename(device)
-      Ohai::Log.debug("Inspecting device: #{disk}")
+    # --- Step 2: Detect all local disks (sd*, nvme*) ---
+    Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
+      disk = File.basename(device_path)
+      Ohai::Log.debug("Checking local disk: #{disk}")
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip if disk is a multipath slave
       if multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
+        Ohai::Log.debug("Skipping #{disk} (multipath slave)")
         next
       end
 
+      # Try to get size via lsblk
       disk_size = nil
-
-      # First try parsing lsblk
       begin
-        so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
-        disk_line = so.find do |line|
-          name, size, type, *_ = line.strip.split
-          type == 'disk' && name == disk
-        end
-        if disk_line
-          disk_parts = disk_line.strip.split
-          disk_size = disk_parts[1].to_i / gb
-        end
+        lsblk_out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
+        disk_size = lsblk_out.to_i / gb if lsblk_out =~ /^\d+$/
       rescue => e
         Ohai::Log.debug("lsblk failed for #{disk}: #{e}")
       end
 
-      # Fallback to /sys/block/{disk}/size if lsblk didn't return anything
-      if disk_size.nil?
+      # Fallback: read from sysfs
+      if disk_size.nil? || disk_size == 0
         begin
-          sectors = File.read("/sys/block/#{disk}/size").strip.to_i
-          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").strip.to_i
+          sectors = File.read("/sys/block/#{disk}/size").to_i
+          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i
           disk_size = (sectors * sector_size) / gb
-          Ohai::Log.debug("Fallback size for #{disk}: #{disk_size} GB")
+          Ohai::Log.debug("Size from sysfs for #{disk}: #{disk_size} GB")
         rescue => e
-          Ohai::Log.debug("Could not read size from sysfs for #{disk}: #{e}")
+          Ohai::Log.debug("sysfs size read failed for #{disk}: #{e}")
           next
         end
       end
 
-      vendor = if File.exist?("#{device}/device/vendor")
-                 File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
+      vendor = if File.exist?("#{device_path}/device/vendor")
+                 File.read("#{device_path}/device/vendor").strip
                else
                  'Unknown'
                end
-      Ohai::Log.debug("Vendor for #{disk}: #{vendor}")
 
-      disks[disk] = Mash.new unless disks.key?(disk)
+      disks[disk] = Mash.new
       disks[disk]['type'] = 'Local'
       disks[disk]['size_gb'] = disk_size
+      disks[disk]['vendor'] = vendor
       Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
     end
 
-    # Get WWN info
-    Dir['/sys/class/fc_host/*'].each do |fc_host|
+    # --- Step 3: Get FC WWNs (if any) ---
+    Dir.glob('/sys/class/fc_host/*').each do |fc_host|
       %w(port_name).each do |port|
-        if File.exist?("#{fc_host}/#{port}")
-          File.open("#{fc_host}/#{port}") do |f|
-            diskinfo['NodeWWN' + File.basename(fc_host)] = f.read_nonblock(1024).strip
-          end
+        path = File.join(fc_host, port)
+        if File.exist?(path)
+          diskinfo["NodeWWN#{File.basename(fc_host)}"] = File.read(path).strip
         end
       end
     end
@@ -116,4 +107,5 @@ Ohai.plugin(:Diskinformation) do
     disk_information diskinfo
   end
 end
+
 # rubocop:enable Style/Next
