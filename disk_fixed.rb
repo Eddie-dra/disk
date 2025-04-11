@@ -58,20 +58,35 @@ Ohai.plugin(:Diskinformation) do
         next
       end
 
-      # Run lsblk and parse actual disk size
-      so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
-      disk_line = so.find do |line|
-        name, size, type, *_ = line.strip.split
-        type == 'disk' && name == disk
+      disk_size = nil
+
+      # First try parsing lsblk
+      begin
+        so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
+        disk_line = so.find do |line|
+          name, size, type, *_ = line.strip.split
+          type == 'disk' && name == disk
+        end
+        if disk_line
+          disk_parts = disk_line.strip.split
+          disk_size = disk_parts[1].to_i / gb
+        end
+      rescue => e
+        Ohai::Log.debug("lsblk failed for #{disk}: #{e}")
       end
 
-      if disk_line.nil?
-        Ohai::Log.debug("No valid 'disk' line found for #{disk}, skipping")
-        next
+      # Fallback to /sys/block/{disk}/size if lsblk didn't return anything
+      if disk_size.nil?
+        begin
+          sectors = File.read("/sys/block/#{disk}/size").strip.to_i
+          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").strip.to_i
+          disk_size = (sectors * sector_size) / gb
+          Ohai::Log.debug("Fallback size for #{disk}: #{disk_size} GB")
+        rescue => e
+          Ohai::Log.debug("Could not read size from sysfs for #{disk}: #{e}")
+          next
+        end
       end
-
-      disk_parts = disk_line.strip.split
-      disk_size = disk_parts[1].to_i / gb
 
       vendor = if File.exist?("#{device}/device/vendor")
                  File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
