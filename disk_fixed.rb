@@ -56,12 +56,12 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug("Checking disk: #{disk}")
 
       # Skip if disk is part of multipath (only dm devices, not regular devices like sda, sdb)
-      if multipath_slaves.include?(disk)
+      if multipath_slaves.include?(disk) || disk =~ /^dm-\d+/
         Ohai::Log.debug("Skipping #{disk}: part of multipath")
         next
       end
 
-      # Only consider valid local disks (sda, sdb, etc.)
+      # Only consider valid local disks (sd*, nvme*)
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
       # Get disk size using lsblk
