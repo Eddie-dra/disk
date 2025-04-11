@@ -10,7 +10,6 @@ Ohai.plugin(:Diskinformation) do
     Ohai::Log.debug('Starting DiskInfoPlugin')
 
     disks = Mash.new
-    diskinfo = Mash.new
     gb = 1_073_741_824
 
     multipath_slaves = []
@@ -56,15 +55,16 @@ Ohai.plugin(:Diskinformation) do
       disk = File.basename(device_path)
       Ohai::Log.debug("Checking disk: #{disk}")
 
-      next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
-
       # Skip if disk is part of multipath
       if multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk}: part of multipath")
         next
       end
 
-      # Get disk size
+      # Only consider valid local disks (sda, sdb, etc.)
+      next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
+
+      # Get disk size from lsblk
       disk_size = begin
         out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
         out.to_i / gb
@@ -101,20 +101,9 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB, Vendor: #{vendor}")
     end
 
-    # Get WWN info
-    Dir['/sys/class/fc_host/*'].each do |fc_host|
-      %w(port_name).each do |port|
-        if File.exist?("#{fc_host}/#{port}")
-          File.open("#{fc_host}/#{port}") do |f|
-            diskinfo['NodeWWN' + File.basename(fc_host)] = f.read_nonblock(1024).strip
-          end
-        end
-      end
-    end
-
-    # Final output
+    # Output disk information
+    diskinfo = Mash.new
     diskinfo['disks'] = disks
     disk_information diskinfo
   end
 end
-# rubocop:enable Style/Next
