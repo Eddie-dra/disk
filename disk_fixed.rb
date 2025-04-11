@@ -4,7 +4,7 @@ Ohai.plugin(:Diskinformation) do
     disks = Mash.new
     multipath_devices = []
 
-    # Collect all multipath devices using multipath -ll
+    # Step 1: Collect all multipath devices using multipath -ll
     begin
       multipath_output = shell_out('multipath -ll').stdout.lines
       multipath_output.each_with_index do |line, index|
@@ -17,15 +17,15 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug("Multipath error: #{e.message}")
     end
 
-    # Collect all disks (sd*, nvme*, etc.)
+    # Step 2: Collect all disks (sd*, nvme*, etc.)
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
-      # Skip devices that are part of multipath (dm devices)
+      # Skip dm devices (multipath devices)
       next if disk =~ /^dm-/
 
-      # Skip if the disk is part of a multipath device
+      # Step 3: Skip disks that are part of a multipath device
       if multipath_devices.any? { |mpath| File.exist?("/sys/block/#{disk}/slaves/#{mpath}") }
-        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
+        Ohai::Log.debug("Skipping #{disk} because it's part of multipath device.")
         next
       end
 
@@ -43,11 +43,11 @@ Ohai.plugin(:Diskinformation) do
       disks[disk]['size_gb'] = disk_size
     end
 
-    # Add multipath devices to the hash
+    # Step 4: Add multipath devices (dm-*) to the hash
     multipath_devices.each do |mpath|
       disks[mpath] = Mash.new unless disks.key?(mpath)
       disks[mpath]['type'] = 'Multipath'
-      disks[mpath]['size_gb'] = "Multipath device"  # Or size from multipath if available
+      disks[mpath]['size_gb'] = "Multipath device"  # Or actual multipath size if available
     end
 
     disk_information({ 'disks' => disks })
