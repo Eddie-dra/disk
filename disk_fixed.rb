@@ -20,12 +20,18 @@ Ohai.plugin(:Diskinformation) do
     # Step 2: Collect all disks (sd*, nvme*, etc.)
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
-      # Skip dm devices (multipath devices)
+      # Skip dm devices (multipath devices themselves)
       next if disk =~ /^dm-/
 
       # Step 3: Skip disks that are part of a multipath device
-      is_slave = multipath_devices.any? { |mpath| File.exist?("/sys/block/#{disk}/slaves/#{mpath}") }
-      
+      is_slave = false
+      multipath_devices.each do |mpath|
+        if File.exist?("/sys/block/#{disk}/slaves/#{mpath}")
+          is_slave = true
+          break
+        end
+      end
+
       if is_slave
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath device.")
         next
