@@ -58,12 +58,6 @@ Ohai.plugin(:Diskinformation) do
         next
       end
 
-      # Skip if disk has WWID and multipath is enabled (likely a SAN single-path)
-      if multipath_enabled && File.exist?("#{device}/device/wwid")
-        Ohai::Log.debug("Skipping #{disk} — has WWID but not part of multipath (likely SAN single-path)")
-        next
-      end
-
       so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
       disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
@@ -99,6 +93,7 @@ Ohai.plugin(:Diskinformation) do
       end
     end
 
+    # Assign disks to diskinfo
     diskinfo['disks'] = disks
     disk_information diskinfo
   end
