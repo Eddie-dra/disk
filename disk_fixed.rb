@@ -3,18 +3,19 @@ Ohai.plugin(:Diskinformation) do
   collect_data(:linux, :redhat) do
     disks = Mash.new
     multipath_devices = []
+    local_disks = Mash.new
 
-    # Collect all block devices (both disks and multipath)
+    # Step 1: Collect all block devices (both disks and multipath)
     Dir['/sys/block/{sd*,nvme*,dm-*}'].each do |device|
       disk = File.basename(device)
 
-      # Skip dm-* devices (multipath devices)
+      # Step 2: Skip dm-* devices (multipath devices)
       if disk =~ /^dm-/
         multipath_devices << disk
         next
       end
 
-      # Check if this disk is part of a multipath device (as a slave)
+      # Step 3: Check if this disk is part of a multipath device (as a slave)
       is_multipath_slave = false
       Dir.glob("/sys/block/#{disk}/slaves/*").each do |slave|
         if multipath_devices.include?(File.basename(slave))
@@ -23,10 +24,10 @@ Ohai.plugin(:Diskinformation) do
         end
       end
 
-      # If this is a multipath slave, skip it
+      # Step 4: If this is a multipath slave, skip it
       next if is_multipath_slave
 
-      # Get the disk size using lsblk
+      # Step 5: Get the disk size using lsblk
       disk_size = 0
       begin
         disk_size = shell_out("lsblk -b -o SIZE -n -r /dev/#{disk}").stdout.strip.to_i / (1024 * 1024 * 1024)
@@ -45,16 +46,35 @@ Ohai.plugin(:Diskinformation) do
         end
       end
 
-      # If the disk has a valid size, add it to the list
+      # Step 6: If the disk has a valid size, add it to the list
       if disk_size > 0
-        disks[disk] = Mash.new
-        disks[disk]['type'] = 'Local'
-        disks[disk]['size_gb'] = disk_size
+        local_disks[disk] = Mash.new
+        local_disks[disk]['type'] = 'Local'
+        local_disks[disk]['size_gb'] = disk_size
       end
     end
 
+    # Step 7: Now handle multipath devices (dm-*)
+    multipath_devices.each do |mpath_device|
+      disk_size = 0
+      begin
+        disk_size = shell_out("lsblk -b -o SIZE -n -r /dev/#{mpath_device}").stdout.strip.to_i / (1024 * 1024 * 1024)
+      rescue
+        Ohai::Log.debug("Failed to get size for multipath device #{mpath_device}")
+      end
+
+      if disk_size > 0
+        disks[mpath_device] = Mash.new
+        disks[mpath_device]['type'] = 'Multipath'
+        disks[mpath_device]['size_gb'] = disk_size
+      end
+    end
+
+    # Step 8: Combine local disks and multipath disks
     diskinfo = Mash.new
-    diskinfo['disks'] = disks
+    diskinfo['disks'] = local_disks.merge(disks)
+
+    # Step 9: Return the final list
     disk_information diskinfo
   end
 end
