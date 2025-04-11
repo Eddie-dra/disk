@@ -2,34 +2,29 @@ Ohai.plugin(:Diskinformation) do
   provides 'disk_information'
   collect_data(:linux, :redhat) do
     disks = Mash.new
-    multipath_slaves = []
+    multipath_devices = []
 
-    # Step 1: Collect multipath slaves
+    # Step 1: Collect multipath devices (not the slaves)
     begin
       multipath_output = shell_out('multipath -ll').stdout.lines
       multipath_output.each_with_index do |line, index|
         if line =~ /(\w+)\s+\(.*\)/  # Found a multipath device
           mpath_name = Regexp.last_match(1)
 
-          # Find and collect slaves
-          slaves_line = multipath_output[index + 1]
-          if slaves_line
-            slaves_line.scan(/(\S+)\s+\d+/) do |match|
-              multipath_slaves << match[0]  # Collect the slave device names
-            end
-          end
+          # Add multipath device to the multipath_devices list
+          multipath_devices << mpath_name
         end
       end
     rescue => e
       Ohai::Log.debug("Error with multipath: #{e.message}")
     end
 
-    # Step 2: Collect all disks, excluding the multipath slave devices
+    # Step 2: Collect all disks, excluding any that are part of a multipath device
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
 
-      # Skip if disk is a multipath slave
-      next if multipath_slaves.include?(disk)
+      # Skip if the disk is part of a multipath device (i.e., if it appears in the multipath_devices list)
+      next if multipath_devices.any? { |mpath| File.exist?("/sys/block/dm-*/slaves/#{disk}") }
 
       # Get the size of the disk
       disk_size = begin
@@ -46,17 +41,11 @@ Ohai.plugin(:Diskinformation) do
     end
 
     # Step 3: Add multipath devices themselves (not their slaves)
-    multipath_output.each do |line|
-      if line =~ /(\w+)\s+\(.*\)/  # Identify multipath device name
-        mpath_name = Regexp.last_match(1)
-
-        # Add multipath device to the disks hash (not the slaves)
-        next if disks.key?(mpath_name)  # Skip if multipath device is already in the list (from slaves exclusion step)
-
-        disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
-        disks[mpath_name]['type'] = 'Multipath'
-        disks[mpath_name]['size_gb'] = 'Multipath Device'  # Placeholder size for multipath
-      end
+    multipath_devices.each do |mpath_name|
+      # Add multipath device to the disks hash
+      disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
+      disks[mpath_name]['type'] = 'Multipath'
+      disks[mpath_name]['size_gb'] = 'Multipath Device'  # Placeholder size for multipath
     end
 
     # Return the disk information
