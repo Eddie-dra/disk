@@ -50,23 +50,25 @@ Ohai.plugin(:Diskinformation) do
     Dir['/sys/block/{sd*,nvme*}'].each do |device|
       disk = File.basename(device)
 
-      # If the disk is part of multipath, skip it
+      # Explicit debug to check if we're seeing 'sdb'
+      Ohai::Log.debug("Inspecting disk: #{disk}")
+
+      # Skip disks that are part of multipath
       if multipath_enabled && multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
         next
       end
 
-      # Check if the disk is visible in /sys/block
+      # If the disk is not part of multipath, proceed
       if !File.exist?("/sys/block/#{disk}")
         Ohai::Log.debug("Disk #{disk} does not exist in /sys/block")
         next
       end
 
-      puts "Inspecting disk: #{disk}"
-
+      # Ensure we're processing only valid disks (sd*, nvme*)
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/ # Valid disks (sd*, nvme*)
 
-      # Fetch disk size
+      # Fetch disk size from lsblk
       so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
       disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
