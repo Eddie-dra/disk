@@ -43,43 +43,44 @@ Ohai.plugin(:Diskinformation) do
       multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
       Ohai::Log.debug("Multipath slave devices: #{multipath_slaves}")
     rescue => e
-      Ohai::Log.debug("Multipath not available: #{e}")
+      Ohai::Log.debug("Multipath not available or failed: #{e}")
     end
 
     # --- Step 2: Detect all local disks (sd*, nvme*) ---
     Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
       disk = File.basename(device_path)
-      Ohai::Log.debug("Checking local disk: #{disk}")
+      Ohai::Log.debug("Checking disk: #{disk}")
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
+      # Exclude if part of multipath
       if multipath_slaves.include?(disk)
-        Ohai::Log.debug("Skipping #{disk} (multipath slave)")
+        Ohai::Log.debug("Skipping #{disk}: part of multipath")
         next
       end
 
-      # Try to get size via lsblk
-      disk_size = nil
+      # Use lsblk to determine if it's a disk and get size
       begin
         lsblk_out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
-        disk_size = lsblk_out.to_i / gb if lsblk_out =~ /^\d+$/
+        disk_size = lsblk_out.to_i / gb
       rescue => e
         Ohai::Log.debug("lsblk failed for #{disk}: #{e}")
+        disk_size = nil
       end
 
-      # Fallback: read from sysfs
+      # Fallback to sysfs if needed
       if disk_size.nil? || disk_size == 0
         begin
           sectors = File.read("/sys/block/#{disk}/size").to_i
           sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i
           disk_size = (sectors * sector_size) / gb
-          Ohai::Log.debug("Size from sysfs for #{disk}: #{disk_size} GB")
         rescue => e
-          Ohai::Log.debug("sysfs size read failed for #{disk}: #{e}")
+          Ohai::Log.debug("sysfs read failed for #{disk}: #{e}")
           next
         end
       end
 
+      # Get vendor if available
       vendor = if File.exist?("#{device_path}/device/vendor")
                  File.read("#{device_path}/device/vendor").strip
                else
@@ -93,7 +94,7 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
     end
 
-    # --- Step 3: Get FC WWNs (if any) ---
+    # --- Step 3: FibreChannel WWNs ---
     Dir.glob('/sys/class/fc_host/*').each do |fc_host|
       %w(port_name).each do |port|
         path = File.join(fc_host, port)
