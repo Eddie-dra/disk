@@ -50,10 +50,19 @@ Ohai.plugin(:Diskinformation) do
     Dir['/sys/block/{sd*,nvme*}'].each do |device|
       disk = File.basename(device)
 
+      # Check if the disk is visible in /sys/block and exists
+      if !File.exist?("/sys/block/#{disk}")
+        puts "Disk #{disk} does not exist in /sys/block"
+        next
+      end
+
+      puts "Inspecting disk: #{disk}"
+
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/ # Valid disks (sd*, nvme*)
 
       # Skip if disk is part of multipath (only dm devices, not regular devices like sda, sdb)
       if multipath_slaves.include?(disk) || disk =~ /^dm-\d+/
+        puts "Skipping #{disk} because it's part of multipath"
         next
       end
 
@@ -62,6 +71,7 @@ Ohai.plugin(:Diskinformation) do
       disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
       unless disk_line
+        puts "No valid 'disk' line found for #{disk} (lsblk output)"
         next
       end
 
@@ -74,6 +84,8 @@ Ohai.plugin(:Diskinformation) do
                else
                  'Unknown'
                end
+
+      puts "Vendor for #{disk}: #{vendor}"
 
       # Add disk info to the hash
       disks[disk] = Mash.new unless disks.key?(disk)
