@@ -43,16 +43,22 @@ Ohai.plugin(:Diskinformation) do
         multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
       end
     rescue
-      # Multipath is not available, so just skip it.
+      # Multipath is not available, just skip it.
     end
 
     # Collect local disks (sd*, nvme* etc.)
     Dir['/sys/block/{sd*,nvme*}'].each do |device|
       disk = File.basename(device)
 
-      # Check if the disk is visible in /sys/block and exists
+      # If the disk is part of multipath, skip it
+      if multipath_enabled && multipath_slaves.include?(disk)
+        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
+        next
+      end
+
+      # Check if the disk is visible in /sys/block
       if !File.exist?("/sys/block/#{disk}")
-        puts "Disk #{disk} does not exist in /sys/block"
+        Ohai::Log.debug("Disk #{disk} does not exist in /sys/block")
         next
       end
 
@@ -60,38 +66,40 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/ # Valid disks (sd*, nvme*)
 
-      # Skip if disk is part of multipath (only dm devices, not regular devices like sda, sdb)
-      if multipath_slaves.include?(disk) || disk =~ /^dm-\d+/
-        puts "Skipping #{disk} because it's part of multipath"
-        next
-      end
-
-      # Get disk size using lsblk
+      # Fetch disk size
       so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
       disk_line = so.find { |line| line.strip.split[2] == 'disk' }
 
       unless disk_line
-        puts "No valid 'disk' line found for #{disk} (lsblk output)"
+        Ohai::Log.debug("No valid 'disk' line found for #{disk}")
         next
       end
 
       disk_parts = disk_line.strip.split
       disk_size = disk_parts[1].to_i / gb
 
-      # Get vendor info (handle gracefully if not available)
       vendor = if File.exist?("#{device}/device/vendor")
                  File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
                else
                  'Unknown'
                end
 
-      puts "Vendor for #{disk}: #{vendor}"
-
-      # Add disk info to the hash
+      # Add disk to the result
       disks[disk] = Mash.new unless disks.key?(disk)
       disks[disk]['type'] = 'Local'
       disks[disk]['size_gb'] = disk_size
       disks[disk]['vendor'] = vendor
+    end
+
+    # Add WWN info if available
+    Dir['/sys/class/fc_host/*'].each do |fc_host|
+      %w(port_name).each do |port|
+        if File.exist?("#{fc_host}/#{port}")
+          File.open("#{fc_host}/#{port}") do |f|
+            diskinfo['NodeWWN' + File.basename(fc_host)] = f.read_nonblock(1024).strip
+          end
+        end
+      end
     end
 
     diskinfo['disks'] = disks
