@@ -1,54 +1,105 @@
 Ohai.plugin(:Diskinformation) do
   provides 'disk_information'
   collect_data(:linux, :redhat) do
-    disks = Mash.new
-    multipath_devices = []
+    Ohai::Log.debug('Starting DiskInfoPlugin')
 
-    # Step 1: Collect multipath devices (not the slaves)
+    disks = Mash.new
+    diskinfo = Mash.new
+    gb = 1_073_741_824
+
+    multipath_slaves = []
+    multipath_enabled = false
+
+    # Parse SAN disks from multipath if available
     begin
       multipath_output = shell_out('multipath -ll').stdout.lines
-      multipath_output.each_with_index do |line, index|
-        if line =~ /(\w+)\s+\(.*\)/  # Found a multipath device
-          mpath_name = Regexp.last_match(1)
 
-          # Add multipath device to the multipath_devices list
-          multipath_devices << mpath_name
+      multipath_output.each_with_index do |line, index|
+        next unless line =~ /^(\w+)\s+\(.*\)/ # Match multipath device names
+        mpath_name = Regexp.last_match(1)
+        size_line = multipath_output[index + 1]
+
+        multipath_enabled = true
+
+        if size_line =~ /size=(\d+\.?\d*)T/
+          mpath_size_tb = Regexp.last_match(1).to_f
+          disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
+          disks[mpath_name]['size_gb'] = mpath_size_tb * 1024
+          disks[mpath_name]['type'] = 'SAN'
+          Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_tb * 1024} GB")
+        elsif size_line =~ /size=(\d+\.?\d*)G/
+          mpath_size_gb = Regexp.last_match(1).to_f
+          disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
+          disks[mpath_name]['size_gb'] = mpath_size_gb
+          disks[mpath_name]['type'] = 'SAN'
+          Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_gb} GB")
         end
       end
-    rescue => e
-      Ohai::Log.debug("Error with multipath: #{e.message}")
+
+      # Only gather slaves if multipath is truly present
+      if multipath_enabled
+        multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
+        Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
+      end
+    rescue
+      Ohai::Log.debug('Multipath is not available on this server.')
     end
 
-    # Step 2: Collect all disks, excluding any that are part of a multipath device
-    Dir.glob('/sys/block/{sd*,nvme*}').each do |device_path|
-      disk = File.basename(device_path)
+    # Collect local disks
+    Dir['/sys/block/{sd*,nvme*}'].each do |device|
+      disk = File.basename(device)
+      Ohai::Log.debug("Inspecting device: #{disk}")
 
-      # Skip if the disk is part of a multipath device (i.e., if it appears in the multipath_devices list)
-      next if multipath_devices.any? { |mpath| File.exist?("/sys/block/dm-*/slaves/#{disk}") }
+      next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Get the size of the disk
-      disk_size = begin
-        out = shell_out("lsblk -b -dn -o SIZE /dev/#{disk}").stdout.strip
-        out.to_i / 1_073_741_824  # Convert bytes to GB
-      rescue
-        0
+      # Skip if disk is a multipath slave
+      if multipath_enabled && multipath_slaves.include?(disk)
+        Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
+        next
       end
 
-      # Add the disk to the disks hash
+      # Skip if disk has WWID and multipath is enabled (likely a SAN single-path)
+      if multipath_enabled && File.exist?("#{device}/device/wwid")
+        Ohai::Log.debug("Skipping #{disk} — has WWID but not part of multipath (likely SAN single-path)")
+        next
+      end
+
+      so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
+      disk_line = so.find { |line| line.strip.split[2] == 'disk' }
+
+      unless disk_line
+        Ohai::Log.debug("No valid 'disk' line found for #{disk}")
+        next
+      end
+
+      disk_parts = disk_line.strip.split
+      disk_size = disk_parts[1].to_i / gb
+
+      vendor = if File.exist?("#{device}/device/vendor")
+                 File.open("#{device}/device/vendor") { |f| f.read_nonblock(1024).strip }
+               else
+                 'Unknown'
+               end
+      Ohai::Log.debug("Vendor for #{disk}: #{vendor}")
+
       disks[disk] = Mash.new unless disks.key?(disk)
       disks[disk]['type'] = 'Local'
       disks[disk]['size_gb'] = disk_size
+      Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
     end
 
-    # Step 3: Add multipath devices themselves (not their slaves)
-    multipath_devices.each do |mpath_name|
-      # Add multipath device to the disks hash
-      disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
-      disks[mpath_name]['type'] = 'Multipath'
-      disks[mpath_name]['size_gb'] = 'Multipath Device'  # Placeholder size for multipath
+    # Get WWN info
+    Dir['/sys/class/fc_host/*'].each do |fc_host|
+      %w(port_name).each do |port|
+        if File.exist?("#{fc_host}/#{port}")
+          File.open("#{fc_host}/#{port}") do |f|
+            diskinfo['NodeWWN' + File.basename(fc_host)] = f.read_nonblock(1024).strip
+          end
+        end
+      end
     end
 
-    # Return the disk information
-    disk_information({ 'disks' => disks })
+    diskinfo['disks'] = disks
+    disk_information diskinfo
   end
 end
