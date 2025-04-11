@@ -1,83 +1,95 @@
+#
+# Copyright:: 2016, Danske Bank A/S
+#
+# This plugin collects disk volume information for Linux hosts
+#
+
 Ohai.plugin(:Diskinformation) do
   provides 'disk_information'
-
-  collect_data(:linux, :redhat) do
+  collect_data(:linux) do
     disks = Mash.new
-    gb = 1_073_741_824  # 1 GB in bytes
+    diskinfo = Mash.new
+    gb = 1_073_741_824
 
-    # Initialize multipath duplicates set
-    multipath_duplicates = Set.new
+    # Get list of all available block devices
+    block_devices = Dir.glob('/sys/block/*').map { |d| File.basename(d) }
 
-    # Gather multipath devices from multipath -ll
+    Ohai::Log.debug("Found block devices: #{block_devices.inspect}")
+
+    # Get multipath slaves if multipath is present
+    multipath_slaves = []
     begin
-      multipath_output = shell_out('multipath -ll').stdout.lines
-      multipath_output.each do |line|
-        # Detect multipath devices and add them to the set of duplicates
-        if line =~ /^(\w+)\s+\(.*\)/  # Detect multipath device name
-          mpath_name = Regexp.last_match(1)
-          multipath_duplicates.add(mpath_name)
-          Ohai::Log.debug("Multipath device detected: #{mpath_name}")
-        end
+      if File.exist?('/etc/multipath.conf') || shell_out('which multipath').exitstatus == 0
+        multipath_output = shell_out('multipath -ll').stdout
+        multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }
+        Ohai::Log.debug("Multipath slaves found: #{multipath_slaves.inspect}")
       end
     rescue => e
-      Ohai::Log.debug("No multipath information available: #{e}")
+      Ohai::Log.debug("Multipath check failed: #{e.message}")
     end
 
-    # Debugging output for multipath duplicates
-    Ohai::Log.debug("Multipath duplicates: #{multipath_duplicates.to_a}")
+    # Process each block device
+    block_devices.each do |disk|
+      next unless disk =~ /^(sd|hd|vd|xvd|nvme|dm-)/  # Skip loop, ram, etc.
 
-    # Collect all disks (sd*, nvme*)
-    Dir['/sys/block/{sd*,nvme*}'].each do |device_path|
-      disk = File.basename(device_path)
+      Ohai::Log.debug("Processing disk: #{disk}")
 
-      # Debugging: Show device path and name
-      Ohai::Log.debug("Inspecting device: #{device}")
-
-      # Skip multipath duplicates
-      if multipath_duplicates.include?(disk)
-        Ohai::Log.debug("Skipping #{disk}: part of multipath device")
+      # Skip if this is a multipath slave
+      if multipath_slaves.include?(disk)
+        Ohai::Log.debug("Skipping #{disk} - part of multipath")
         next
       end
 
-      # Only consider valid disk names (e.g., sda, sdb, etc.)
-      next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/  # Valid disk names
+      # Get disk size
+      begin
+        size_file = "/sys/block/#{disk}/size"
+        if File.exist?(size_file)
+          sectors = File.read(size_file).to_i
+          sector_size = File.read("/sys/block/#{disk}/queue/hw_sector_size").to_i rescue 512
+          size_bytes = sectors * sector_size
+          size_gb = size_bytes / gb
+        else
+          # Fallback to lsblk if sysfs info not available
+          lsblk_output = shell_out("lsblk -b -n -d -o SIZE /dev/#{disk}").stdout.strip
+          size_gb = lsblk_output.to_i / gb
+        end
 
-      # Get disk size using lsblk
-      disk_size = begin
-        out = shell_out("lsblk -b -o NAME,SIZE -n /dev/#{disk}").stdout.strip
-        size_in_bytes = out.split[1].to_i
-        size_in_gb = size_in_bytes / gb
-        size_in_gb
+        # Get disk vendor
+        vendor = if File.exist?("/sys/block/#{disk}/device/vendor")
+                   File.read("/sys/block/#{disk}/device/vendor").strip
+                 else
+                   'Unknown'
+                 end
+
+        # Determine disk type
+        type = if disk.start_with?('dm-')
+                 'LVM'
+               elsif multipath_slaves.include?(disk)
+                 'SAN'
+               else
+                 'Local'
+               end
+
+        disks[disk] = {
+          'size_gb' => size_gb,
+          'vendor' => vendor,
+          'type' => type
+        }
+
+        Ohai::Log.debug("Added disk #{disk}: #{disks[disk].inspect}")
       rescue => e
-        Ohai::Log.debug("Error fetching size for disk #{disk}: #{e}")
-        0  # Default to 0 if lsblk fails
+        Ohai::Log.debug("Failed to process disk #{disk}: #{e.message}")
       end
-
-      # Skip disk if we can't get a valid size
-      if disk_size == 0
-        Ohai::Log.debug("Skipping #{disk}: invalid size")
-        next
-      end
-
-      # Get vendor info (handle gracefully if not available)
-      vendor = 'Unknown'
-      vendor_path = "/sys/block/#{disk}/device/vendor"
-      if File.exist?(vendor_path)
-        vendor = File.read(vendor_path).strip
-        Ohai::Log.debug("Vendor for #{disk}: #{vendor}")
-      else
-        Ohai::Log.debug("Vendor info not found for #{disk}")
-      end
-
-      # Add disk information to the hash
-      disks[disk] = Mash.new unless disks.key?(disk)
-      disks[disk]['type'] = 'Local'
-      disks[disk]['size_gb'] = disk_size
-      disks[disk]['vendor'] = vendor
     end
 
-    # Output disk information
-    diskinfo = Mash.new
+    # Add WWN info if available
+    Dir.glob('/sys/class/fc_host/*').each do |fc_host|
+      port_name = "#{fc_host}/port_name"
+      if File.exist?(port_name)
+        diskinfo['NodeWWN' + File.basename(fc_host)] = File.read(port_name).strip
+      end
+    end
+
     diskinfo['disks'] = disks
     disk_information diskinfo
   end
