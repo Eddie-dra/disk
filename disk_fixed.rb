@@ -21,6 +21,7 @@ Ohai.plugin(:Diskinformation) do
 
         multipath_enabled = true
 
+        # Handle multipath device size
         if size_line =~ /size=(\d+\.?\d*)T/
           mpath_size_tb = Regexp.last_match(1).to_f
           disks[mpath_name] = Mash.new unless disks.key?(mpath_name)
@@ -34,11 +35,21 @@ Ohai.plugin(:Diskinformation) do
           disks[mpath_name]['type'] = 'SAN'
           Ohai::Log.debug("SAN disk added: #{mpath_name}, Size: #{mpath_size_gb} GB")
         end
+
+        # Collect the multipath slave devices
+        if size_line && size_line =~ /size=(\d+\.?\d*)G/
+          # Collect the slave device names listed under multipath
+          slaves_line = multipath_output[index + 2] # slaves are listed in the next line
+          if slaves_line
+            slaves_line.scan(/(\S+)\s+\d+/) do |match|
+              multipath_slaves << match[0]  # Collect slave devices (like sdc, sdd, etc.)
+            end
+          end
+        end
       end
 
       # Only gather slaves if multipath is truly present
       if multipath_enabled
-        multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
         Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
       end
     rescue
@@ -52,8 +63,8 @@ Ohai.plugin(:Diskinformation) do
 
       next unless disk =~ /^sd[a-z]+$/ || disk =~ /^nvme\d+n\d+$/
 
-      # Skip if disk is a multipath slave
-      if multipath_enabled && multipath_slaves.include?(disk)
+      # Skip if disk is a multipath slave (based on multipath -ll)
+      if multipath_slaves.include?(disk)
         Ohai::Log.debug("Skipping #{disk} because it's part of multipath")
         next
       end
@@ -82,7 +93,7 @@ Ohai.plugin(:Diskinformation) do
       Ohai::Log.debug("Local disk added: #{disk}, Size: #{disk_size} GB")
     end
 
-    # Get WWN info
+    # Get WWN info (optional part)
     Dir['/sys/class/fc_host/*'].each do |fc_host|
       %w(port_name).each do |port|
         if File.exist?("#{fc_host}/#{port}")
@@ -93,7 +104,6 @@ Ohai.plugin(:Diskinformation) do
       end
     end
 
-    # Assign disks to diskinfo
     diskinfo['disks'] = disks
     disk_information diskinfo
   end
