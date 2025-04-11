@@ -41,8 +41,8 @@ Ohai.plugin(:Diskinformation) do
 
       multipath_slaves = Dir.glob('/sys/block/dm-*/slaves/*').map { |p| File.basename(p) }.uniq
       Ohai::Log.debug("Multipath slave devices detected: #{multipath_slaves}")
-    rescue
-      Ohai::Log.debug('Multipath is not available on this server.')
+    rescue => e
+      Ohai::Log.debug("Multipath not available or failed: #{e}")
     end
 
     # Collect local disks
@@ -58,13 +58,15 @@ Ohai.plugin(:Diskinformation) do
         next
       end
 
-      # NO MORE SKIPPING DISKS BASED ON WWID 🔥
-
+      # Run lsblk and parse actual disk size
       so = shell_out("lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINT -n -r /dev/#{disk}").stdout.lines
-      disk_line = so.find { |line| line.strip.split[2] == 'disk' }
+      disk_line = so.find do |line|
+        name, size, type, *_ = line.strip.split
+        type == 'disk' && name == disk
+      end
 
-      unless disk_line
-        Ohai::Log.debug("No valid 'disk' line found for #{disk}")
+      if disk_line.nil?
+        Ohai::Log.debug("No valid 'disk' line found for #{disk}, skipping")
         next
       end
 
