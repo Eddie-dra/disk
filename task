@@ -1,1 +1,30 @@
-Found a likely vulnerability: fetch("/log", ...) sends data to the server.
+(() => {
+  const originalFetch = window.fetch;
+
+  window.fetch = async function (...args) {
+    const request = new Request(...args);
+    const watched = new URL(request.url).pathname === "/log";
+
+    if (watched) {
+      console.log("REQUEST:", request.method, request.url);
+      console.log("BODY:", await request.clone().text());
+    }
+
+    const response = await originalFetch.apply(this, args);
+
+    if (watched) {
+      const text = await response.clone().text();
+      console.log("RESPONSE:", response.status, text);
+      const flags = text.match(/MetaCTF\{[^}]+\}/g);
+      if (flags) console.log("FLAG:", ...flags);
+    }
+
+    return response;
+  };
+
+  window.stopGymAudit = () => {
+    window.fetch = originalFetch;
+  };
+
+  console.log("Audit active. Type a dummy password; do not reload.");
+})();
