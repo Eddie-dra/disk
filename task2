@@ -1,1 +1,8 @@
-MetaCTF{r3us3_r3purp0s3_pwn3d}
+{
+  "servers": {
+    "TLDR MCP": {
+      "type": "sse",
+      "url": "https://4f952d0f9e4424ba.live.sbhost.io/mcp"
+    }
+  }
+}
