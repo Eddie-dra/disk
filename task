@@ -1,1 +1,1 @@
-<!doctype html><script>alert(location.origin)</script>
+Found a likely vulnerability: fetch("/log", ...) sends data to the server.
